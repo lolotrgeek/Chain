@@ -11,6 +11,39 @@ class Ledger {
         this.chain = new Chain()
         this.node = new Node(this.name)
 
+        this.node.core.on("connect", (id, name, headers) => {
+            //send chain length to peer when they connect
+            this.node.send({ to: id }, { length: this.chain.blocks.length }, 1000)
+        })
+        this.node.listen({ from: "" }, (data, id, name) => {
+            // listen for responses from peers
+            if (typeof data === 'object') {
+                // if you receive a chain length longer than yours, request a block map
+                if (data.length > this.chain.length) {
+                    this.target_length = data.length
+                    this.node.send({ to: id }, { request: "block_map" })
+                }
+                // if you get a request for a block map, map your blocks and respond with the map
+                else if(data.request === "block_map") this.node.send({to: id}, {block_map: this.chain.mapBlocks()})
+                else if(data.block_map) {
+                    let missing_blocks = this.chain.compare(data.block_map)
+                    missing_blocks.forEach(block_id => this.node.send("request_block", block_id))
+                }
+            }
+        })
+        this.node.listen("request_block", (block_id, name) => {
+            if (name !== this.name) {
+                let found = this.chain.blocks.slice().reverse().find(block => block.block_id === block_id)
+                if (found) this.node.send("block", found)
+            }
+        })
+        this.node.listen("requested_block", (block, name) => {
+            console.log("requested_block!", block)
+            if (name !== this.name) this.chain.add(block)
+            // sort the all the new blocks after they all arrive
+            if(this.chain.length >= this.target_length) this.chain.blocks = this.chain.sortBlocks(this.chain.blocks)
+        })
+
         this.node.listen("block", (block, name) => {
             console.log("block!", block)
             if (name !== this.name) this.chain.add(block)
